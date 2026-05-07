@@ -87,6 +87,12 @@ app.get('/', (req: Request, res: Response) => {
   return res.render('index.html');
 });
 
+//========
+app.get('/protected', (req, res) => {
+  res.render('protected');
+});
+//========
+
 // listen for requests :)
 app.listen(config.port || 8080, () => {
   console.log(`Your app is listening on port ${config.port || 8080}`);

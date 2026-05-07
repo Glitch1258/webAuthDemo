@@ -29,6 +29,9 @@ import {
   onAuthStateChanged,
   User
 } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
+import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getAnalytics } from 'firebase/analytics';
 import {
   RegistrationCredential,
@@ -46,22 +49,33 @@ import { StoredCredential } from './common';
 
 const aaguids = await fetch('/webauthn/aaguids').then(res => res.json());
 
+// ============================================================
+// FULLY LOCAL FIREBASE CONFIG - Uses ONLY local emulators
+// ============================================================
 const app = initializeApp({
-  apiKey: "AIzaSyBC_U6UbKJE0evrgaITJSk6T_sZmMaZO-4",
-  authDomain: "try-webauthn.firebaseapp.com",
-  projectId: "try-webauthn",
-  storageBucket: "try-webauthn.appspot.com",
-  messagingSenderId: "557912693280",
-  appId: "1:557912693280:web:c47da88d666eaf0f40fa45",
-  measurementId: "G-NWVKPRNL5Q"
+  projectId: "demo-webauthn",  // "demo-" prefix tells Firebase to use emulators
+  apiKey: "fake-api-key-for-local-dev",
+  authDomain: "localhost",
+  storageBucket: "localhost",
 });
 
-getAnalytics(app);
-
+// Connect to ALL local emulators
 const auth = getAuth();
-if (location.hostname === 'localhost') {
+const db = getFirestore(app);
+const functions = getFunctions(app);
+const storage = getStorage(app);
+
+// Only connect to emulators when running locally
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
   connectAuthEmulator(auth, 'http://localhost:9099');
+  connectFirestoreEmulator(db, 'localhost', 8080);
+  connectFunctionsEmulator(functions, 'localhost', 5001);
+  connectStorageEmulator(storage, 'localhost', 9199);
 }
+
+// Note: Analytics doesn't work with emulators, but it won't break anything
+// getAnalytics(app);  // Commented out - would try to contact real Firebase
+
 const ui = new firebaseui.auth.AuthUI(auth);
 const icon = $('#user-icon');
 const transportIconMap = {
@@ -538,23 +552,28 @@ const listCredentials = async (): Promise<void> => {
  */
 const registerCredential = async (opts: WebAuthnRegistrationObject): Promise<any> => {
   // Fetch credential creation options from the server.
+  /*Credential options are parameters passed to navigator.credentials.create()
+   defining the relying party, user details, security challenge,
+   allowed authenticator types, and existing credentials to prevent duplicates.
+  These options are fetched from the server, decoded from base64url,
+   and then passed to the browser to initiate WebAuthn registration.*/
   const options: PublicKeyCredentialCreationOptionsJSON =
-    await _fetch('/webauthn/registerRequest', opts);
+      await _fetch('/webauthn/registerRequest', opts);
 
   // Decode encoded parameters.
-  const user = {
+  const user = {  // Convert user object by decoding the base64url user ID
     ...options.user,
     id: base64url.decode(options.user.id)
   } as PublicKeyCredentialUserEntity;
-  const challenge = base64url.decode(options.challenge);
-  const _excludeCredentials: PublicKeyCredentialDescriptorJSON[] = collectCredentials();
-  const excludeCredentials = _excludeCredentials.map(cred => {
+  const challenge = base64url.decode(options.challenge);  // Decode the challenge from base64url
+  const _excludeCredentials: PublicKeyCredentialDescriptorJSON[] = collectCredentials();  // Get existing credentials to avoid duplicate registration
+  const excludeCredentials = _excludeCredentials.map(cred => {  // Decode each excluded credential's ID
     return {
       ...cred,
       id: base64url.decode(cred.id),
     } as PublicKeyCredentialDescriptor;
   });
-  const decodedOptions = {
+  const decodedOptions = {  // Assemble complete, decoded options for credential creation
     ...options,
     user,
     challenge,
@@ -562,34 +581,34 @@ const registerCredential = async (opts: WebAuthnRegistrationObject): Promise<any
     excludeCredentials,
   } as PublicKeyCredentialCreationOptions;
 
-  console.log('[CredentialCreationOptions]', decodedOptions);
+  console.log('[CredentialCreationOptions]', decodedOptions);  // Log options for debugging
 
   // Create a new attestation.
-  const credential = await navigator.credentials.create({
+  const credential = await navigator.credentials.create({  // Request browser to create new WebAuthn credential
     publicKey: decodedOptions
   }) as RegistrationCredential;
 
   // Encode the attestation.
-  const rawId = base64url.encode(credential.rawId);
-  const clientDataJSON = base64url.encode(credential.response.clientDataJSON);
-  const attestationObject = base64url.encode(credential.response.attestationObject);
-  const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+  const rawId = base64url.encode(credential.rawId);  // Encode credential's raw ID back to base64url
+  const clientDataJSON = base64url.encode(credential.response.clientDataJSON);  // Encode client data
+  const attestationObject = base64url.encode(credential.response.attestationObject);  // Encode attestation object
+  const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};  // Initialize container for extension results
 
   // if `getClientExtensionResults()` is supported, serialize the result.
-  if (credential.getClientExtensionResults) {
-    const extensions: AuthenticationExtensionsClientOutputs = credential.getClientExtensionResults();
-    if (extensions.credProps) {
-      clientExtensionResults.credProps = extensions.credProps;
+  if (credential.getClientExtensionResults) {  // Check if browser supports extension results
+    const extensions: AuthenticationExtensionsClientOutputs = credential.getClientExtensionResults();  // Get extension results
+    if (extensions.credProps) {  // If credential properties extension exists
+      clientExtensionResults.credProps = extensions.credProps;  // Copy credential properties
     }
   }
-  let transports: any[] = [];
+  let transports: any[] = [];  // Initialize transports array
 
   // if `getTransports()` is supported, serialize the result.
-  if (credential.response.getTransports) {
-    transports = credential.response.getTransports();
+  if (credential.response.getTransports) {  // Check if authenticator provides transport info
+    transports = credential.response.getTransports();  // Get supported transport methods (USB, NFC, BLE, etc)
   }
 
-  const encodedCredential = {
+  const encodedCredential = {  // Build encoded credential response object for server
     id: credential.id,
     rawId,
     response: {
@@ -598,17 +617,17 @@ const registerCredential = async (opts: WebAuthnRegistrationObject): Promise<any
       transports,
     },
     type: credential.type,
-    clientExtensionResults, 
+    clientExtensionResults,
   } as RegistrationResponseJSON;
 
-  const parsedCredential = await parseRegistrationCredential(credential);
+  const parsedCredential = await parseRegistrationCredential(credential);  // Parse credential into readable format
 
-  console.log('[RegistrationResponseJSON]', parsedCredential);
+  console.log('[RegistrationResponseJSON]', parsedCredential);  // Log parsed credential for debugging
 
   // Verify and store the attestation.
-  await _fetch('/webauthn/registerResponse', encodedCredential);
+  await _fetch('/webauthn/registerResponse', encodedCredential);  // Send encoded credential to server for verification
 
-  return parsedCredential;
+  return parsedCredential;  // Return parsed credential to caller
 };
 
 /**
@@ -616,74 +635,107 @@ const registerCredential = async (opts: WebAuthnRegistrationObject): Promise<any
  * @param opts 
  * @returns 
  */
+// Define an async function that authenticates a user using WebAuthn
+// Takes WebAuthnAuthenticationObject options and returns a Promise of any type
 const authenticate = async (opts: WebAuthnAuthenticationObject): Promise<any> => {
-  // Fetch the credential request options.
-  const options: PublicKeyCredentialRequestOptionsJSON =
-    await _fetch('/webauthn/authRequest', opts);
 
-  // Decode encoded parameters.
+  // STEP 1: FETCH AUTHENTICATION OPTIONS FROM SERVER
+  // Fetch the credential request options from the server endpoint
+  // This tells the browser what kind of authentication is expected
+  const options: PublicKeyCredentialRequestOptionsJSON =
+      await _fetch('/webauthn/authRequest', opts);
+
+  // STEP 2: DECODE THE CHALLENGE
+  // WebAuthn uses a random challenge to prevent replay attacks
+  // The challenge comes base64url-encoded, so decode it back to binary
   const challenge = base64url.decode(options.challenge);
 
-  
+  // STEP 3: PROCESS ALLOWED CREDENTIALS
+  // Get the list of allowed credentials from a helper function or empty array
+  // $('#empty-allow-credentials') checks if a checkbox is checked to allow any credential
   const _allowCredentials: PublicKeyCredentialDescriptorJSON[] =
-    $('#empty-allow-credentials').checked ? [] : collectCredentials();
+      $('#empty-allow-credentials').checked ? [] : collectCredentials();
+
+  // Transform each credential: decode the base64url-encoded ID back to binary
+  // This creates the actual PublicKeyCredentialDescriptor objects the browser needs
   const allowCredentials = _allowCredentials.map(cred => {
     return {
-      ...cred,
-      id: base64url.decode(cred.id),
+      ...cred,                    // Keep all original properties
+      id: base64url.decode(cred.id),  // Decode the credential ID from base64url
     } as PublicKeyCredentialDescriptor;
   });
+
+  // STEP 4: BUILD COMPLETE OPTIONS OBJECT
+  // Combine all the authentication options into the final request object
   const decodedOptions = {
-    ...options,
-    allowCredentials,
-    hints: opts.hints,
-    challenge,
+    ...options,           // Include all original options
+    allowCredentials,     // Add the processed allowed credentials
+    hints: opts.hints,    // Add any authentication hints (e.g., "security-key", "client-device")
+    challenge,            // Add the decoded binary challenge
   } as PublicKeyCredentialRequestOptions;
 
+  // Log the request options for debugging purposes
   console.log('[CredentialRequestOptions]', decodedOptions);
 
-  // Authenticate the user.
+  // STEP 5: PERFORM THE AUTHENTICATION
+  // Ask the browser to authenticate the user using WebAuthn
+  // This will trigger the browser's native UI (fingerprint, security key, etc.)
   const credential = await navigator.credentials.get({
     publicKey: decodedOptions
   }) as AuthenticationCredential;
 
-  // Encode the credential.
-  const rawId = base64url.encode(credential.rawId);
-  const authenticatorData = base64url.encode(credential.response.authenticatorData);
-  const clientDataJSON = base64url.encode(credential.response.clientDataJSON);
-  const signature = base64url.encode(credential.response.signature);
-  const userHandle = credential.response.userHandle ?
-    base64url.encode(credential.response.userHandle) : undefined;
+  // STEP 6: ENCODE CREDENTIAL RESPONSE FOR SERVER
+  // The browser returns binary data, but we need to send it as base64url to the server
+  const rawId = base64url.encode(credential.rawId);           // Encode the credential ID
+  const authenticatorData = base64url.encode(credential.response.authenticatorData);  // Encode authenticator data
+  const clientDataJSON = base64url.encode(credential.response.clientDataJSON);        // Encode client data
+  const signature = base64url.encode(credential.response.signature);                  // Encode the cryptographic signature
+  const userHandle = credential.response.userHandle ?        // User handle is optional
+      base64url.encode(credential.response.userHandle) : undefined;
+
+  // STEP 7: HANDLE CLIENT EXTENSIONS
+  // Initialize empty object for any WebAuthn extension results
   const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
 
-  // if `getClientExtensionResults()` is supported, serialize the result.
+  // Check if the browser supports the getClientExtensionResults method
+  // This method returns additional data from WebAuthn extensions
   if (credential.getClientExtensionResults) {
     const extensions: AuthenticationExtensionsClientOutputs = credential.getClientExtensionResults();
+    // If credential properties extension is present, include it in results
     if (extensions.credProps) {
       clientExtensionResults.credProps = extensions.credProps;
     }
   }
 
+  // STEP 8: BUILD ENCODED CREDENTIAL OBJECT
+  // Create the final JSON-serializable object to send to the server
   const encodedCredential = {
-    id: credential.id,
-    rawId,
+    id: credential.id,                    // The credential ID as a string
+    rawId,                                // Base64url-encoded raw ID
     response: {
-      authenticatorData,
-      clientDataJSON,
-      signature,
-      userHandle,
+      authenticatorData,                  // Base64url-encoded authenticator data
+      clientDataJSON,                    // Base64url-encoded client data
+      signature,                         // Base64url-encoded signature
+      userHandle,                        // Base64url-encoded user handle (if present)
     },
-    type: credential.type,
-    clientExtensionResults,
+    type: credential.type,               // Usually "public-key"
+    clientExtensionResults,              // Any extension results
   } as AuthenticationResponseJSON;
 
+  // STEP 9: PARSE FOR CLIENT DISPLAY
+  // Convert the credential to a more user-friendly format (likely for UI display)
   const parsedCredential = await parseAuthenticationCredential(credential);
 
+  // Log the parsed credential for debugging
   console.log('[AuthenticationResponseJSON]', parsedCredential);
 
-  // Verify and store the credential.
+  // STEP 10: VERIFY AND STORE ON SERVER
+  // Send the encoded credential to the server for verification
+  // The server will validate the signature against the stored public key
   await _fetch('/webauthn/authResponse', encodedCredential);
 
+  // STEP 11: RETURN THE PARSED CREDENTIAL
+  // Return the user-friendly credential object (likely for UI feedback)
   return parsedCredential;
 };
 
@@ -842,6 +894,7 @@ const onAuthenticate = async (): Promise<void> => {
     rippleCard(`ID-${parsedCredential.id}`);
     showSnackbar('Authentication succeeded!', parsedCredential);
     listCredentials();
+    window.location.href = '/protected';
   } catch (e: any) {
     console.error(e);
     showSnackbar(e.message);

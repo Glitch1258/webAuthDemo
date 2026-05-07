@@ -9,12 +9,12 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "clean": "rimraf ./dist",
-    "build": "npm run clean && rollup -c && tsc --project ./src/tsconfig.json",
+    "build": "npm run clean && rollup -c && tsc --project ./src/tsconfig.json && xcopy /E /I src\\templates dist\\templates",
     "build:prod": "npm run clean && rollup -c --environment NODE_ENV:production && tsc --project ./src/tsconfig.json",
     "deploy": "gcloud app deploy dev.yaml --project=try-webauthn",
     "deploy:prod": "gcloud app deploy app.yaml --project=try-webauthn",
     "gcp-build": "npm run build:prod",
-    "dev": "NODE_ENV=localhost node dist/server.mjs",
+    "dev": "cross-env NODE_ENV=localhost node dist/server.mjs",
     "emulator": "firebase emulators:start --only firestore,auth --project try-webauthn --import=./.data --export-on-exit",
     "start": "node dist/server.mjs"
   },
@@ -80,6 +80,7 @@
     "@types/rollup-plugin-node-builtins": "^2.1.5",
     "@types/rollup-plugin-node-globals": "^1.4.5",
     "@types/uid-safe": "^2.1.5",
+    "cross-env": "^10.1.0",
     "firebase-tools": "^13.29.1",
     "rimraf": "^6.0.1",
     "rollup": "^4.29.1",
